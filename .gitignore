@@ -1,0 +1,6 @@
+#files compiled
+*.6
+#files executable
+#files for tests input/output
+*.json
+*.log
