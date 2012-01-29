@@ -1,6 +1,10 @@
 #files compiled
 *.6
 #files executable
+6.out
 #files for tests input/output
+_test
+_obj
+_testmain.go
 *.json
 *.log
