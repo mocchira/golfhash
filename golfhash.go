@@ -13,11 +13,12 @@ import (
 
 const (
 	defPower     = 12
-	defMaxProbes = 15
+	defMaxProbes = 8
 	defSubNum    = 1<<defPower + defMaxProbes
 	hashLow      = 6
 	hashOne      = 1 << hashLow
 	hashMask     = hashOne - 1
+	hashIdxMask  = 1<<defPower - 1
 	hashBits     = 8 * 8
 	hashSubHash  = hashMask
 	hashNil      = 0
@@ -67,16 +68,20 @@ type hashEntry struct {
 }
 
 type hashSubTable struct {
-	power     uint8
-	maxProbes uint8
-	entry     [defSubNum]*hashEntry
-	buf       [defSubNum * 2]hashEntry
+	shift int
+	used  int
+	entry [defSubNum]*hashEntry
 }
 type Golfhash struct {
 	Count int64
-	power uint8
+	power int
 	table *hashSubTable
 	htype HashType
+}
+
+type hashInsertPoint struct {
+	idx int
+	st  *hashSubTable
 }
 
 var (
@@ -84,10 +89,10 @@ var (
 	StringHashType  StrHashType
 )
 
-func newHashSubTable(power uint8) *hashSubTable {
+func newHashSubTable(used int) *hashSubTable {
 	st := &hashSubTable{
-		power:     power,
-		maxProbes: defMaxProbes,
+		shift: hashBits - used,
+		used:  used,
 	}
 	return st
 }
@@ -101,7 +106,8 @@ func Init(ht HashType) *Golfhash {
 }
 
 func (golf *Golfhash) Remove(key unsafe.Pointer) bool {
-	var di uint64
+	var hi1, hi2 hashInsertPoint
+	var di int
 	var pv unsafe.Pointer
 	pst := golf.table
 	hash := golf.htype.Hash(key)
@@ -110,7 +116,7 @@ func (golf *Golfhash) Remove(key unsafe.Pointer) bool {
 		hash += hashOne
 	}
 	for {
-		if golf.lookup(key, hash, &pst, &di, &pv, 0) {
+		if golf.lookup(key, hash, &pst, &di, &pv, &hi1, &hi2) {
 			if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&pst.entry[di])), unsafe.Pointer(pst.entry[di]), nil) {
 				atomic.AddInt64(&golf.Count, -1)
 				return true
@@ -123,31 +129,39 @@ func (golf *Golfhash) Remove(key unsafe.Pointer) bool {
 }
 
 func (golf *Golfhash) Lookup(key unsafe.Pointer, val *unsafe.Pointer) bool {
-	var di uint64
+	var hi1, hi2 hashInsertPoint
+	var di int
 	pst := golf.table
 	hash := golf.htype.Hash(key)
 	hash &^= hashMask
 	if hash < hashLow {
 		hash += hashOne
 	}
-	return golf.lookup(key, hash, &pst, &di, val, 0)
+	return golf.lookup(key, hash, &pst, &di, val, &hi1, &hi2)
 }
 
-func (golf *Golfhash) lookup(key unsafe.Pointer, hash hashVal, st **hashSubTable, i *uint64, val *unsafe.Pointer, used uint8) bool {
-	shift := hashBits - (*st).power - used
-	idxMask := 1<<(*st).power - 1
-	idx := (uint64(hash) >> uint64(shift)) & uint64(idxMask)
-	for *i = idx; *i < idx+uint64((*st).maxProbes); *i++ {
+func (golf *Golfhash) lookup(key unsafe.Pointer,
+				hash hashVal,
+				st **hashSubTable,
+				i *int,
+				val *unsafe.Pointer,
+				pnil *hashInsertPoint,
+				palloc *hashInsertPoint) bool {
+	idx := int((uint64(hash) >> uint64((*st).shift)) & uint64(hashIdxMask))
+	for *i = idx; *i < idx+defMaxProbes; *i++ {
 		e := (*st).entry[*i]
 		if e == nil {
+			if pnil.st == nil {
+				pnil.st = *st
+				pnil.idx = *i
+			}
 			continue
 		}
 		if e.hash&hashMask == hashSubHash {
-			var ni uint64
+			var ni int
 			pstOld := *st
-			used += (*st).power
 			*st = (*hashSubTable)(e.val)
-			if golf.lookup(key, hash, st, &ni, val, used) {
+			if golf.lookup(key, hash, st, &ni, val, pnil, palloc) {
 				*i = ni
 				return true
 			}
@@ -158,37 +172,34 @@ func (golf *Golfhash) lookup(key unsafe.Pointer, hash hashVal, st **hashSubTable
 				return true
 			}
 		}
+		if palloc.st == nil {
+			palloc.st = *st
+			palloc.idx = *i
+		}
 	}
 	return false
 }
 
-func (golf *Golfhash) insert2alloc(key unsafe.Pointer, val unsafe.Pointer, hash hashVal, st *hashSubTable, used uint8) bool {
-	shift := hashBits - st.power - used
-	idxMask := 1<<st.power - 1
-	idx := (uint64(hash) >> uint64(shift)) & uint64(idxMask)
-	for i := idx; i < idx+uint64(st.maxProbes); i++ {
+func (golf *Golfhash) insert2alloc(key unsafe.Pointer, val unsafe.Pointer, hash hashVal, st *hashSubTable) bool {
+	idx := int((uint64(hash) >> uint64(st.shift)) & uint64(hashIdxMask))
+	for i := idx; i < idx+defMaxProbes; i++ {
 		e := st.entry[i]
 		if e != nil && (e.hash&hashMask) == hashSubHash {
-			used += st.power
-			if golf.insert2alloc(key, val, hash, (*hashSubTable)(e.val), used) {
+			if golf.insert2alloc(key, val, hash, (*hashSubTable)(e.val)) {
 				return true
 			}
 		} else {
-			nst := newHashSubTable(golf.power)
+			nst := newHashSubTable(st.used + defPower)
 			if e != nil {
-				golf.insert2nil(e.key, e.val, e.hash, nst, used+st.power) // no possiblity to fail
+				golf.insert2nil(e.key, e.val, e.hash, nst) // no possiblity to fail
 			}
-			var he *hashEntry
-			if e == &st.buf[i] {
-				he = &st.buf[i+defSubNum]
-			} else {
-				he = &st.buf[i]
+			he := &hashEntry{
+				hash: hashSubHash,
+				key:  nil,
+				val:  unsafe.Pointer(nst),
 			}
-			he.hash = hashSubHash
-			he.key = nil
-			he.val = unsafe.Pointer(nst)
 			if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&st.entry[i])), unsafe.Pointer(e), unsafe.Pointer(he)) {
-				if golf.insert2nil(key, val, hash, nst, used+st.power) {
+				if golf.insert2nil(key, val, hash, nst) {
 					return true
 				}
 			}
@@ -197,28 +208,21 @@ func (golf *Golfhash) insert2alloc(key unsafe.Pointer, val unsafe.Pointer, hash 
 	return false
 }
 
-func (golf *Golfhash) insert2nil(key unsafe.Pointer, val unsafe.Pointer, hash hashVal, st *hashSubTable, used uint8) bool {
-	shift := hashBits - st.power - used
-	idxMask := 1<<st.power - 1
-	idx := (uint64(hash) >> uint64(shift)) & uint64(idxMask)
-	for i := idx; i < idx+uint64(st.maxProbes); i++ {
+func (golf *Golfhash) insert2nil(key unsafe.Pointer, val unsafe.Pointer, hash hashVal, st *hashSubTable) bool {
+	idx := int((uint64(hash) >> uint64(st.shift)) & uint64(hashIdxMask))
+	for i := idx; i < idx+defMaxProbes; i++ {
 		e := st.entry[i]
 		if e == nil {
-			var he *hashEntry
-			if e == &st.buf[i] {
-				he = &st.buf[i+defSubNum]
-			} else {
-				he = &st.buf[i]
+			he := &hashEntry{
+				hash: hash,
+				key:  key,
+				val:  val,
 			}
-			he.hash = hash
-			he.key = key
-			he.val = val
 			if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&st.entry[i])), unsafe.Pointer(e), unsafe.Pointer(he)) {
 				return true
 			}
 		} else if e.hash&hashMask == hashSubHash {
-			used += st.power
-			if golf.insert2nil(key, val, hash, (*hashSubTable)(e.val), used) {
+			if golf.insert2nil(key, val, hash, (*hashSubTable)(e.val)) {
 				return true
 			}
 		}
@@ -227,7 +231,8 @@ func (golf *Golfhash) insert2nil(key unsafe.Pointer, val unsafe.Pointer, hash ha
 }
 
 func (golf *Golfhash) Insert(key unsafe.Pointer, val unsafe.Pointer) bool {
-	var di uint64
+	var hi1, hi2 hashInsertPoint
+	var di int
 	var pv unsafe.Pointer
 	hash := golf.htype.Hash(key)
 	hash &^= hashMask
@@ -235,32 +240,54 @@ func (golf *Golfhash) Insert(key unsafe.Pointer, val unsafe.Pointer) bool {
 		hash += hashOne
 	}
 	pst := golf.table
+	he := &hashEntry{
+		hash: hash,
+		key:  key,
+		val:  val,
+	}
 	for {
-		if golf.lookup(key, hash, &pst, &di, &pv, 0) {
-			var he *hashEntry
-			if pst.entry[di] == &pst.buf[di] {
-				he = &pst.buf[di+defSubNum]
-			} else {
-				he = &pst.buf[di]
-			}
-			he.hash = hash
-			he.key = key
-			he.val = val
+		if golf.lookup(key, hash, &pst, &di, &pv, &hi1, &hi2) {
 			if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&pst.entry[di])), unsafe.Pointer(pst.entry[di]), unsafe.Pointer(he)) {
-				atomic.AddInt64(&golf.Count, 1)
-				return true
+				return false
 			}
 		} else {
+			if hi1.st != nil {
+				if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&hi1.st.entry[hi1.idx])), nil, unsafe.Pointer(he)) {
+					atomic.AddInt64(&golf.Count, 1)
+					return true
+				}
+			}
+			if hi2.st != nil {
+				e := hi2.st.entry[hi2.idx]
+				if e.hash&hashMask == hashSubHash {
+					break
+				}
+				nst := newHashSubTable(hi2.st.used + defPower)
+				if e != nil {
+					golf.insert2nil(e.key, e.val, e.hash, nst) // no possiblity to fail
+				}
+				hest := &hashEntry{
+					hash: hashSubHash,
+					key:  nil,
+					val:  unsafe.Pointer(nst),
+				}
+				if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&hi2.st.entry[hi2.idx])), unsafe.Pointer(e), unsafe.Pointer(hest)) {
+					if golf.insert2nil(key, val, hash, nst) {
+						atomic.AddInt64(&golf.Count, 1)
+						return true
+					}
+				}
+			}
 			break
 		}
 
 	}
 	for {
-		if golf.insert2nil(key, val, hash, golf.table, 0) {
+		if golf.insert2nil(key, val, hash, golf.table) {
 			atomic.AddInt64(&golf.Count, 1)
 			return true
 		}
-		if golf.insert2alloc(key, val, hash, golf.table, 0) {
+		if golf.insert2alloc(key, val, hash, golf.table) {
 			atomic.AddInt64(&golf.Count, 1)
 			return true
 		}
@@ -269,30 +296,28 @@ func (golf *Golfhash) Insert(key unsafe.Pointer, val unsafe.Pointer) bool {
 	return false
 }
 
-type Visitor func(arg interface{}, level uint8, key, val unsafe.Pointer)
+type Visitor func(arg interface{}, level int, key, val unsafe.Pointer)
 
-func (golf *Golfhash) visit(st *hashSubTable, used, level uint8, visitor Visitor, arg interface{}) {
-	shift := hashBits - st.power - used
-	idxMask := 1<<st.power - 1
-	var i uint64
-	for ; i < uint64(len(st.entry)); i++ {
+func (golf *Golfhash) visit(st *hashSubTable, level int, visitor Visitor, arg interface{}) {
+	var i int
+	for ; i < len(st.entry); i++ {
 		e := st.entry[i]
 		if e == nil {
 			continue
 		}
 		if e.hash&hashMask == hashSubHash {
-			golf.visit((*hashSubTable)(e.val), used+st.power, level+1, visitor, arg)
+			golf.visit((*hashSubTable)(e.val), level+1, visitor, arg)
 			continue
 		} else {
 			visitor(arg, level, e.key, e.val)
 		}
-		idx := (uint64(e.hash) >> uint64(shift)) & uint64(idxMask)
-		if i >= idx+uint64(st.maxProbes) || i < idx {
-			panic(fmt.Sprintf("inconsisntet index: %d, used: %d, level: %d", i, used, level))
+		idx := int((uint64(e.hash) >> uint64(st.shift)) & uint64(hashIdxMask))
+		if i >= idx+defMaxProbes || i < idx {
+			panic(fmt.Sprintf("inconsisntet index: %d, used: %d, level: %d", i, st.used, level))
 		}
 	}
 }
 
 func (golf *Golfhash) Visit(visitor Visitor, arg interface{}) {
-	golf.visit(golf.table, 0, 0, visitor, arg)
+	golf.visit(golf.table, 0, visitor, arg)
 }

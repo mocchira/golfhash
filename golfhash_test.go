@@ -61,13 +61,18 @@ func TestTypeHash(t *testing.T) {
 	}
 }
 
-func printVisitor(arg interface{}, level uint8, key, val unsafe.Pointer) {
+func printVisitor(arg interface{}, level int, key, val unsafe.Pointer) {
 	tab := strings.Repeat("\t", int(level))
 	switch arg.(type) {
 	case IntHashType:
 		fmt.Printf("%skey: %d, val: %d\n", tab, *(*int)(key), *(*int)(val))
 	case StrHashType:
 		fmt.Printf("%skey: %s, val: %s\n", tab, *(*string)(key), *(*string)(val))
+	}
+}
+func countVisitor(arg interface{}, level int, key, val unsafe.Pointer) {
+	if si, ok := arg.([]int); ok {
+		si[level] += 1
 	}
 }
 
@@ -90,7 +95,9 @@ func TestStringHashBase(t *testing.T) {
 	if golf.Count != 1 {
 		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 1)
 	}
-	golf.Visit(printVisitor, StringHashType)
+	if !testing.Short() {
+		golf.Visit(printVisitor, StringHashType)
+	}
 	if !golf.Remove(unsafe.Pointer(&key)) {
 		t.Fatalf("remove failed key:%s", key)
 	}
@@ -122,7 +129,9 @@ func TestIntegerHashBase(t *testing.T) {
 	if golf.Count != 1 {
 		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 1)
 	}
-	golf.Visit(printVisitor, IntegerHashType)
+	if !testing.Short() {
+		golf.Visit(printVisitor, IntegerHashType)
+	}
 	if !golf.Remove(unsafe.Pointer(&key)) {
 		t.Fatalf("remove failed key:%d", key)
 	}
@@ -135,13 +144,13 @@ func TestIntegerHashBase(t *testing.T) {
 
 }
 
-func TestIntegerHashInsert10000(t *testing.T) {
+func TestIntegerHashInsert100000(t *testing.T) {
 	golf := Init(IntegerHashType)
 	if golf.Count != 0 {
 		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
 	}
-	const loop = 1e4
-	var fk, lk int
+	const loop = 1e5
+	var fk, lk, dup int
 	for i := 0; i < loop; i++ {
 		key := rand.Int()
 		val := rand.Int()
@@ -151,7 +160,7 @@ func TestIntegerHashInsert10000(t *testing.T) {
 			lk = key
 		}
 		if !golf.Insert(unsafe.Pointer(&key), unsafe.Pointer(&val)) {
-			t.Errorf("insert failed key:%d val:%d", key, val)
+			dup++
 		}
 	}
 	var result *int
@@ -161,19 +170,26 @@ func TestIntegerHashInsert10000(t *testing.T) {
 	if !golf.Lookup(unsafe.Pointer(&lk), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
 		t.Errorf("inconsistent lookup result key:%d val:%d", lk, *result)
 	}
-	golf.Visit(printVisitor, IntegerHashType)
-	if golf.Count != loop {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop)
+	if !testing.Short() {
+		golf.Visit(printVisitor, IntegerHashType)
+	} else {
+		counter := make([]int, 5)
+		golf.Visit(countVisitor, counter)
+		fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
+	}
+	if int(golf.Count) != loop-dup {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop-dup)
 	}
 }
 
-func TestStringHashInsert10000(t *testing.T) {
+func TestStringHashInsert100000(t *testing.T) {
 	golf := Init(StringHashType)
 	if golf.Count != 0 {
 		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
 	}
-	const loop = 1e4
+	const loop = 1e5
 	var fk, lk string
+	var dup int
 	for i := 0; i < loop; i++ {
 		key := strconv.Itoa(rand.Int())
 		val := strconv.Itoa(rand.Int())
@@ -183,7 +199,7 @@ func TestStringHashInsert10000(t *testing.T) {
 			lk = key
 		}
 		if !golf.Insert(unsafe.Pointer(&key), unsafe.Pointer(&val)) {
-			t.Errorf("insert failed key:%s val:%s", key, val)
+			dup++
 		}
 	}
 	var result *string
@@ -193,14 +209,20 @@ func TestStringHashInsert10000(t *testing.T) {
 	if !golf.Lookup(unsafe.Pointer(&lk), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
 		t.Errorf("inconsistent lookup result key:%s val:%s", lk, *result)
 	}
-	golf.Visit(printVisitor, StringHashType)
-	if golf.Count != loop {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop)
+	if !testing.Short() {
+		golf.Visit(printVisitor, StringHashType)
+	} else {
+		counter := make([]int, 5)
+		golf.Visit(countVisitor, counter)
+		fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
+	}
+	if int(golf.Count) != loop-dup {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop-dup)
 	}
 }
 
 const (
-	numGoroutines = 1
+	numGoroutines = 4
 )
 
 func BenchmarkStringHashInsert(b *testing.B) {

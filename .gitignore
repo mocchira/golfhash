@@ -8,3 +8,6 @@ _obj
 _testmain.go
 *.json
 *.log
+#files for profiler input/output
+cpu*
+mem*
