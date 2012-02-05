@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -76,10 +77,44 @@ func countVisitor(arg interface{}, level int, key, val unsafe.Pointer) {
 	}
 }
 
+func TestTriHashBase(t *testing.T) {
+	golf := Init(TriStructure, StringHashType)
+	if golf.Count() != 0 {
+		t.Errorf("inconsistent data count: %d expected:%d", golf.Count(), 0)
+	}
+	key := "key"
+	val := "val"
+	if !golf.Insert(unsafe.Pointer(&key), unsafe.Pointer(&val)) {
+		t.Fatalf("insert failed key:%s val:%s", key, val)
+	}
+	golf.Visit(printVisitor, StringHashType)
+	var result *string
+	if !golf.Lookup(unsafe.Pointer(&key), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
+		t.Fatalf("lookup failed key:%s", key)
+	} else {
+		fmt.Printf("lookup key:%s, val:%s\n", key, *result)
+	}
+	if golf.Count() != 1 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 1)
+	}
+	golf.Visit(printVisitor, StringHashType)
+	if !golf.Remove(unsafe.Pointer(&key)) {
+		t.Fatalf("remove failed key:%s", key)
+	}
+	if golf.Lookup(unsafe.Pointer(&key), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
+		t.Fatalf("inconsistent lookup result key:%s val:%s", key, *result)
+	}
+	golf.Visit(printVisitor, StringHashType)
+	if golf.Count() != 0 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 0)
+	}
+
+}
+
 func TestStringHashBase(t *testing.T) {
-	golf := Init(StringHashType)
-	if golf.Count != 0 {
-		t.Errorf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	golf := Init(OASkipListStructure, StringHashType)
+	if golf.Count() != 0 {
+		t.Errorf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 	key := "key"
 	val := "val"
@@ -92,8 +127,8 @@ func TestStringHashBase(t *testing.T) {
 	} else {
 		fmt.Printf("lookup key:%s, val:%s\n", key, *result)
 	}
-	if golf.Count != 1 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 1)
+	if golf.Count() != 1 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 1)
 	}
 	if !testing.Short() {
 		golf.Visit(printVisitor, StringHashType)
@@ -104,16 +139,16 @@ func TestStringHashBase(t *testing.T) {
 	if golf.Lookup(unsafe.Pointer(&key), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
 		t.Fatalf("inconsistent lookup result key:%s val:%s", key, *result)
 	}
-	if golf.Count != 0 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	if golf.Count() != 0 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 
 }
 
 func TestIntegerHashBase(t *testing.T) {
-	golf := Init(IntegerHashType)
-	if golf.Count != 0 {
-		t.Errorf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	golf := Init(OASkipListStructure, IntegerHashType)
+	if golf.Count() != 0 {
+		t.Errorf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 	key := 20120926
 	val := 20120322
@@ -126,8 +161,8 @@ func TestIntegerHashBase(t *testing.T) {
 	} else {
 		fmt.Printf("lookup key:%d, val:%d\n", key, *result)
 	}
-	if golf.Count != 1 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 1)
+	if golf.Count() != 1 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 1)
 	}
 	if !testing.Short() {
 		golf.Visit(printVisitor, IntegerHashType)
@@ -138,16 +173,16 @@ func TestIntegerHashBase(t *testing.T) {
 	if golf.Lookup(unsafe.Pointer(&key), (*unsafe.Pointer)(unsafe.Pointer(&result))) {
 		t.Fatalf("inconsistent lookup result key:%d val:%d", key, *result)
 	}
-	if golf.Count != 0 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	if golf.Count() != 0 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 
 }
 
 func TestIntegerHashInsert100000(t *testing.T) {
-	golf := Init(IntegerHashType)
-	if golf.Count != 0 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	golf := Init(OASkipListStructure, IntegerHashType)
+	if golf.Count() != 0 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 	const loop = 1e5
 	var fk, lk, dup int
@@ -177,15 +212,23 @@ func TestIntegerHashInsert100000(t *testing.T) {
 		golf.Visit(countVisitor, counter)
 		fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
 	}
-	if int(golf.Count) != loop-dup {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop-dup)
+	if int(golf.Count()) != loop-dup {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), loop-dup)
 	}
 }
 
 func TestStringHashInsert100000(t *testing.T) {
-	golf := Init(StringHashType)
-	if golf.Count != 0 {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, 0)
+	golf := Init(OASkipListStructure, StringHashType)
+	testStringHashInsert100000(golf, t)
+}
+func TestStringTriInsert100000(t *testing.T) {
+	golf := Init(TriStructure, StringHashType)
+	testStringHashInsert100000(golf, t)
+}
+
+func testStringHashInsert100000(golf HashInterface, t *testing.T) {
+	if golf.Count() != 0 {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), 0)
 	}
 	const loop = 1e5
 	var fk, lk string
@@ -212,21 +255,74 @@ func TestStringHashInsert100000(t *testing.T) {
 	if !testing.Short() {
 		golf.Visit(printVisitor, StringHashType)
 	} else {
-		counter := make([]int, 5)
+		counter := make([]int, 10)
 		golf.Visit(countVisitor, counter)
 		fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
 	}
-	if int(golf.Count) != loop-dup {
-		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count, loop-dup)
+	if int(golf.Count()) != loop-dup {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), loop-dup)
 	}
 }
 
+func TestStringHashParallelOp(t *testing.T) {
+	golf := Init(OASkipListStructure, StringHashType)
+	testStringHashParallelOp(golf, t)
+}
+func TestStringTriParallelOp(t *testing.T) {
+	golf := Init(TriStructure, StringHashType)
+	testStringHashParallelOp(golf, t)
+}
+func testStringHashParallelOp(golf HashInterface, t *testing.T) {
+	const numRec = 1e5
+	const numGoroutines = 8
+	var dup int64
+	done := make(chan bool)
+	for t := 0; t < numGoroutines; t++ {
+		go func(tid int) {
+			for i := 0; i < numRec; i++ {
+				key := strconv.Itoa(rand.Intn(numRec) + tid*numRec)
+				val := strconv.Itoa(rand.Intn(numRec))
+				if !golf.Insert(unsafe.Pointer(&key), unsafe.Pointer(&val)) {
+					atomic.AddInt64(&dup, 1)
+				}
+			}
+			done <- true
+		}(t)
+	}
+	for t := 0; t < numGoroutines; t++ {
+		<-done
+	}
+	counter := make([]int, 10)
+	golf.Visit(countVisitor, counter)
+	fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
+	if golf.Count() != (numGoroutines*numRec - dup) {
+		t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), numGoroutines*numRec-dup)
+	}
+	// count
+	/*
+		var total int64
+		for _, c := range counter {
+			total += int64(c)
+		}
+		if golf.Count() != total {
+			t.Fatalf("inconsistent data count: %d expected:%d", golf.Count(), total)
+		}
+	*/
+}
+
 const (
-	numGoroutines = 4
+	numGoroutines = 8
 )
 
 func BenchmarkStringHashInsert(b *testing.B) {
-	golf := Init(StringHashType)
+	golf := Init(OASkipListStructure, StringHashType)
+	benchmarkStringHashInsert(golf, b)
+}
+func BenchmarkStringTriInsert(b *testing.B) {
+	golf := Init(TriStructure, StringHashType)
+	benchmarkStringHashInsert(golf, b)
+}
+func benchmarkStringHashInsert(golf HashInterface, b *testing.B) {
 	done := make(chan bool)
 	for t := 0; t < numGoroutines; t++ {
 		go func(tid int) {
@@ -244,7 +340,7 @@ func BenchmarkStringHashInsert(b *testing.B) {
 }
 func BenchmarkStringHashInsertBuiltin(b *testing.B) {
 	var lk sync.RWMutex
-	m := make(map[*string]*string)
+	m := make(map[string]*string)
 	done := make(chan bool)
 	for t := 0; t < numGoroutines; t++ {
 		go func(tid int) {
@@ -252,7 +348,7 @@ func BenchmarkStringHashInsertBuiltin(b *testing.B) {
 				key := strconv.FormatInt(rand.Int63(), 10)
 				val := strconv.FormatInt(rand.Int63(), 10)
 				lk.Lock()
-				m[&key] = &val
+				m[key] = &val
 				lk.Unlock()
 			}
 			done <- true
@@ -263,8 +359,61 @@ func BenchmarkStringHashInsertBuiltin(b *testing.B) {
 	}
 }
 
+func BenchmarkStringHashLookup(b *testing.B) {
+	golf := Init(OASkipListStructure, StringHashType)
+	benchmarkStringHashLookup(golf, b)
+}
+func BenchmarkStringTriLookup(b *testing.B) {
+	golf := Init(TriStructure, StringHashType)
+	benchmarkStringHashLookup(golf, b)
+}
+func benchmarkStringHashLookup(golf HashInterface, b *testing.B) {
+	b.StopTimer()
+	const numRec = 5e5
+	var dup, hit int
+	var pval unsafe.Pointer
+	for i := 0; i < numRec; i++ {
+		key := strconv.Itoa(rand.Intn(numRec))
+		val := strconv.Itoa(rand.Intn(numRec))
+		if !golf.Insert(unsafe.Pointer(&key), unsafe.Pointer(&val)) {
+			dup++
+		}
+	}
+	counter := make([]int, 10)
+	golf.Visit(countVisitor, counter)
+	fmt.Printf("counter/level:%v, dup:%d\n", counter, dup)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		key := strconv.Itoa(rand.Intn(numRec))
+		if golf.Lookup(unsafe.Pointer(&key), &pval) {
+			hit++
+		}
+	}
+}
+func BenchmarkStringHashLookupBuiltin(b *testing.B) {
+	b.StopTimer()
+	const numRec = 5e5
+	var dup, hit int
+	m := make(map[string]*string)
+	for i := 0; i < numRec; i++ {
+		key := strconv.Itoa(rand.Intn(numRec))
+		val := strconv.Itoa(rand.Intn(numRec))
+		if _, exist := m[key]; exist {
+			dup++
+		}
+		m[key] = &val
+	}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		key := strconv.Itoa(rand.Intn(numRec))
+		if _, exist := m[key]; exist {
+			hit++
+		}
+	}
+}
+
 func BenchmarkIntHashInsert(b *testing.B) {
-	golf := Init(IntegerHashType)
+	golf := Init(OASkipListStructure, IntegerHashType)
 	done := make(chan bool)
 	for t := 0; t < numGoroutines; t++ {
 		go func(tid int) {
@@ -282,7 +431,7 @@ func BenchmarkIntHashInsert(b *testing.B) {
 }
 func BenchmarkIntHashInsertBuiltin(b *testing.B) {
 	var lk sync.RWMutex
-	m := make(map[*int]*int)
+	m := make(map[int]*int)
 	done := make(chan bool)
 	for t := 0; t < numGoroutines; t++ {
 		go func(tid int) {
@@ -290,7 +439,7 @@ func BenchmarkIntHashInsertBuiltin(b *testing.B) {
 				key := rand.Int()
 				val := rand.Int()
 				lk.Lock()
-				m[&key] = &val
+				m[key] = &val
 				lk.Unlock()
 			}
 			done <- true
